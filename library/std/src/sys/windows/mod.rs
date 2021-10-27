@@ -30,6 +30,7 @@ pub mod path;
 pub mod pipe;
 pub mod process;
 pub mod rand;
+pub mod raw_rwlock;
 pub mod rwlock;
 pub mod thread;
 pub mod thread_local_dtor;

@@ -4,9 +4,11 @@
 #![cfg_attr(test, allow(dead_code))]
 #![unstable(issue = "none", feature = "windows_c")]
 
+use crate::mem;
 use crate::os::raw::NonZero_c_ulong;
 use crate::os::raw::{c_char, c_int, c_long, c_longlong, c_uint, c_ulong, c_ushort};
 use crate::ptr;
+use crate::sys::raw_rwlock;
 
 use libc::{c_void, size_t, wchar_t};
 
@@ -735,7 +737,6 @@ if #[cfg(not(target_vendor = "uwp"))] {
             lpTargetFileName: LPCWSTR,
             lpSecurityAttributes: LPSECURITY_ATTRIBUTES,
         ) -> BOOL;
-        pub fn SetThreadStackGuarantee(_size: *mut c_ulong) -> BOOL;
     }
 }
 }
@@ -949,47 +950,6 @@ extern "system" {
         lpNumberOfBytesTransferred: LPDWORD,
         bWait: BOOL,
     ) -> BOOL;
-    pub fn CreateSymbolicLinkW(
-        lpSymlinkFileName: LPCWSTR,
-        lpTargetFileName: LPCWSTR,
-        dwFlags: DWORD,
-    ) -> BOOLEAN;
-    pub fn GetFinalPathNameByHandleW(
-        hFile: HANDLE,
-        lpszFilePath: LPCWSTR,
-        cchFilePath: DWORD,
-        dwFlags: DWORD,
-    ) -> DWORD;
-    pub fn SetFileInformationByHandle(
-        hFile: HANDLE,
-        FileInformationClass: FILE_INFO_BY_HANDLE_CLASS,
-        lpFileInformation: LPVOID,
-        dwBufferSize: DWORD,
-    ) -> BOOL;
-    pub fn SleepConditionVariableSRW(
-        ConditionVariable: PCONDITION_VARIABLE,
-        SRWLock: PSRWLOCK,
-        dwMilliseconds: DWORD,
-        Flags: ULONG,
-    ) -> BOOL;
-
-    pub fn WakeConditionVariable(ConditionVariable: PCONDITION_VARIABLE);
-    pub fn WakeAllConditionVariable(ConditionVariable: PCONDITION_VARIABLE);
-
-    pub fn AcquireSRWLockExclusive(SRWLock: PSRWLOCK);
-    pub fn AcquireSRWLockShared(SRWLock: PSRWLOCK);
-    pub fn ReleaseSRWLockExclusive(SRWLock: PSRWLOCK);
-    pub fn ReleaseSRWLockShared(SRWLock: PSRWLOCK);
-    pub fn TryAcquireSRWLockExclusive(SRWLock: PSRWLOCK) -> BOOLEAN;
-    pub fn TryAcquireSRWLockShared(SRWLock: PSRWLOCK) -> BOOLEAN;
-
-    pub fn CompareStringOrdinal(
-        lpString1: LPCWSTR,
-        cchCount1: c_int,
-        lpString2: LPCWSTR,
-        cchCount2: c_int,
-        bIgnoreCase: BOOL,
-    ) -> c_int;
 }
 
 #[link(name = "ws2_32")]
@@ -1085,23 +1045,112 @@ extern "system" {
     ) -> c_int;
 }
 
+#[inline]
+unsafe fn lockify<'a>(srw_lock: PSRWLOCK) -> &'a raw_rwlock::RawRwLock {
+    mem::transmute(srw_lock)
+}
+
 // Functions that aren't available on every version of Windows that we support,
 // but we still use them and just provide some form of a fallback implementation.
 compat_fn! {
     "kernel32":
 
-    // >= Win10 1607
-    // https://docs.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-setthreaddescription
+    pub fn CreateSymbolicLinkW(_lpSymlinkFileName: LPCWSTR,
+                               _lpTargetFileName: LPCWSTR,
+                               _dwFlags: DWORD) -> BOOLEAN {
+        SetLastError(ERROR_CALL_NOT_IMPLEMENTED as DWORD); 0
+    }
+    pub fn GetFinalPathNameByHandleW(_hFile: HANDLE,
+                                     _lpszFilePath: LPCWSTR,
+                                     _cchFilePath: DWORD,
+                                     _dwFlags: DWORD) -> DWORD {
+        SetLastError(ERROR_CALL_NOT_IMPLEMENTED as DWORD); 0
+    }
+    #[cfg(not(target_vendor = "uwp"))]
+    pub fn SetThreadStackGuarantee(_size: *mut c_ulong) -> BOOL {
+        SetLastError(ERROR_CALL_NOT_IMPLEMENTED as DWORD); 0
+    }
     pub fn SetThreadDescription(hThread: HANDLE,
                                 lpThreadDescription: LPCWSTR) -> HRESULT {
         SetLastError(ERROR_CALL_NOT_IMPLEMENTED as DWORD); E_NOTIMPL
     }
-
-    // >= Win8 / Server 2012
-    // https://docs.microsoft.com/en-us/windows/win32/api/sysinfoapi/nf-sysinfoapi-getsystemtimepreciseasfiletime
+    pub fn SetFileInformationByHandle(_hFile: HANDLE,
+                    _FileInformationClass: FILE_INFO_BY_HANDLE_CLASS,
+                    _lpFileInformation: LPVOID,
+                    _dwBufferSize: DWORD) -> BOOL {
+        SetLastError(ERROR_CALL_NOT_IMPLEMENTED as DWORD); 0
+    }
     pub fn GetSystemTimePreciseAsFileTime(lpSystemTimeAsFileTime: LPFILETIME)
                                           -> () {
         GetSystemTimeAsFileTime(lpSystemTimeAsFileTime)
+    }
+    pub fn CompareStringOrdinal(lpString1: LPCWSTR,
+                                cchCount1: c_int,
+                                lpString2: LPCWSTR,
+                                cchCount2: c_int,
+                                bIgnoreCase: BOOL) -> c_int {
+        extern "C" {
+            fn wcscmp(string1: *const wchar_t, string2: *const wchar_t) -> c_int;
+            #[link_name = "_wcsicmp"]
+            fn wcsicmp(string1: *const wchar_t, string2: *const wchar_t) -> c_int;
+        }
+        if cchCount1 != -1 || cchCount2 != -1 {
+            panic!("CompareStringOrdinal must not be called with bounded strings");
+        }
+        let res = if bIgnoreCase != 0 {
+            wcsicmp(lpString1, lpString2)
+        } else {
+            wcscmp(lpString1, lpString2)
+        };
+        if res < 0 {
+            CSTR_LESS_THAN
+        } else if res > 0 {
+            CSTR_GREATER_THAN
+        } else {
+            CSTR_EQUAL
+        }
+    }
+
+    pub fn SleepConditionVariableSRW(ConditionVariable: PCONDITION_VARIABLE,
+                                     SRWLock: PSRWLOCK,
+                                     dwMilliseconds: DWORD,
+                                     Flags: ULONG) -> BOOL {
+        panic!("condition variables not available")
+    }
+    pub fn WakeConditionVariable(ConditionVariable: PCONDITION_VARIABLE)
+                                 -> () {
+        panic!("condition variables not available")
+    }
+    pub fn WakeAllConditionVariable(ConditionVariable: PCONDITION_VARIABLE)
+                                    -> () {
+        panic!("condition variables not available")
+    }
+
+    pub fn AcquireSRWLockExclusive(SRWLock: PSRWLOCK) -> () {
+        lockify(SRWLock).lock_exclusive();
+    }
+    pub fn AcquireSRWLockShared(SRWLock: PSRWLOCK) -> () {
+        lockify(SRWLock).lock_shared();
+    }
+    pub fn ReleaseSRWLockExclusive(SRWLock: PSRWLOCK) -> () {
+        lockify(SRWLock).unlock_exclusive();
+    }
+    pub fn ReleaseSRWLockShared(SRWLock: PSRWLOCK) -> () {
+        lockify(SRWLock).unlock_shared();
+    }
+    pub fn TryAcquireSRWLockExclusive(SRWLock: PSRWLOCK) -> BOOLEAN {
+        if lockify(SRWLock).try_lock_exclusive() {
+            1
+        } else {
+            0
+        }
+    }
+    pub fn TryAcquireSRWLockShared(SRWLock: PSRWLOCK) -> BOOLEAN {
+        if lockify(SRWLock).try_lock_shared() {
+            1
+        } else {
+            0
+        }
     }
 }
 

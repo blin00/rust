@@ -12,6 +12,7 @@ use crate::ffi::{OsStr, OsString};
 use crate::fmt;
 use crate::fs;
 use crate::io::{self, Error, ErrorKind};
+use crate::iter;
 use crate::mem;
 use crate::num::NonZeroI32;
 use crate::os::windows::ffi::OsStrExt;
@@ -77,9 +78,9 @@ impl Ord for EnvKey {
         unsafe {
             let result = c::CompareStringOrdinal(
                 self.utf16.as_ptr(),
-                self.utf16.len() as _,
+                -1,
                 other.utf16.as_ptr(),
-                other.utf16.len() as _,
+                -1,
                 c::TRUE,
             );
             match result {
@@ -125,7 +126,7 @@ impl PartialEq<str> for EnvKey {
 // they are compared using a caseless string mapping.
 impl From<OsString> for EnvKey {
     fn from(k: OsString) -> Self {
-        EnvKey { utf16: k.encode_wide().collect(), os_string: k }
+        EnvKey { utf16: k.encode_wide().chain(iter::once(0)).collect(), os_string: k }
     }
 }
 
@@ -660,6 +661,7 @@ fn make_envp(maybe_env: Option<BTreeMap<EnvKey, OsString>>) -> io::Result<(*mut 
         for (k, v) in env {
             ensure_no_nuls(k.os_string)?;
             blk.extend(k.utf16);
+            blk.pop();
             blk.push('=' as u16);
             blk.extend(ensure_no_nuls(v)?.encode_wide());
             blk.push(0);
