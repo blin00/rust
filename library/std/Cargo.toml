@@ -22,6 +22,9 @@ unwind = { path = "../unwind" }
 hashbrown = { version = "0.11", default-features = false, features = ['rustc-dep-of-std'] }
 std_detect = { path = "../stdarch/crates/std_detect", default-features = false, features = ['rustc-dep-of-std'] }
 
+[target.'cfg(target_os = "windows")'.dependencies]
+smallvec = { git = "https://github.com/blin00/rust-smallvec", rev = "81a17c81605d54002d7174a2d2212836526ad4bb", features = ['rustc-dep-of-std'] }
+
 # Dependencies of the `backtrace` crate
 addr2line = { version = "0.16.0", optional = true, default-features = false }
 rustc-demangle = { version = "0.1.21", features = ['rustc-dep-of-std'] }

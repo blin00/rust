@@ -4,11 +4,8 @@
 #![cfg_attr(test, allow(dead_code))]
 #![unstable(issue = "none", feature = "windows_c")]
 
-use crate::mem;
 use crate::os::raw::NonZero_c_ulong;
 use crate::os::raw::{c_char, c_int, c_long, c_longlong, c_uint, c_ulong, c_ushort};
-use crate::ptr;
-use crate::sys::raw_rwlock;
 
 use libc::{c_void, size_t, wchar_t};
 
@@ -65,9 +62,7 @@ pub type LPWSABUF = *mut WSABUF;
 pub type LPWSAOVERLAPPED = *mut c_void;
 pub type LPWSAOVERLAPPED_COMPLETION_ROUTINE = *mut c_void;
 
-pub type PCONDITION_VARIABLE = *mut CONDITION_VARIABLE;
 pub type PLARGE_INTEGER = *mut c_longlong;
-pub type PSRWLOCK = *mut SRWLOCK;
 
 pub type SOCKET = crate::os::windows::raw::SOCKET;
 pub type socklen_t = c_int;
@@ -182,9 +177,6 @@ pub const INFINITE: DWORD = !0;
 
 pub const DUPLICATE_SAME_ACCESS: DWORD = 0x00000002;
 
-pub const CONDITION_VARIABLE_INIT: CONDITION_VARIABLE = CONDITION_VARIABLE { ptr: ptr::null_mut() };
-pub const SRWLOCK_INIT: SRWLOCK = SRWLOCK { ptr: ptr::null_mut() };
-
 pub const DETACHED_PROCESS: DWORD = 0x00000008;
 pub const CREATE_NEW_PROCESS_GROUP: DWORD = 0x00000200;
 pub const CREATE_UNICODE_ENVIRONMENT: DWORD = 0x00000400;
@@ -263,6 +255,7 @@ pub const FD_SETSIZE: usize = 64;
 pub const STACK_SIZE_PARAM_IS_A_RESERVATION: DWORD = 0x00010000;
 
 pub const STATUS_SUCCESS: NTSTATUS = 0x00000000;
+pub const STATUS_TIMEOUT: NTSTATUS = 0x00000102;
 
 #[repr(C)]
 #[cfg(not(target_pointer_width = "64"))]
@@ -411,14 +404,6 @@ pub type LPPROGRESS_ROUTINE = crate::option::Option<
     ) -> DWORD,
 >;
 
-#[repr(C)]
-pub struct CONDITION_VARIABLE {
-    pub ptr: LPVOID,
-}
-#[repr(C)]
-pub struct SRWLOCK {
-    pub ptr: LPVOID,
-}
 #[repr(C)]
 pub struct CRITICAL_SECTION {
     CriticalSectionDebug: LPVOID,
@@ -1045,11 +1030,6 @@ extern "system" {
     ) -> c_int;
 }
 
-#[inline]
-unsafe fn lockify<'a>(srw_lock: PSRWLOCK) -> &'a raw_rwlock::RawRwLock {
-    mem::transmute(srw_lock)
-}
-
 // Functions that aren't available on every version of Windows that we support,
 // but we still use them and just provide some form of a fallback implementation.
 compat_fn! {
@@ -1108,48 +1088,6 @@ compat_fn! {
             CSTR_GREATER_THAN
         } else {
             CSTR_EQUAL
-        }
-    }
-
-    pub fn SleepConditionVariableSRW(ConditionVariable: PCONDITION_VARIABLE,
-                                     SRWLock: PSRWLOCK,
-                                     dwMilliseconds: DWORD,
-                                     Flags: ULONG) -> BOOL {
-        panic!("condition variables not available")
-    }
-    pub fn WakeConditionVariable(ConditionVariable: PCONDITION_VARIABLE)
-                                 -> () {
-        panic!("condition variables not available")
-    }
-    pub fn WakeAllConditionVariable(ConditionVariable: PCONDITION_VARIABLE)
-                                    -> () {
-        panic!("condition variables not available")
-    }
-
-    pub fn AcquireSRWLockExclusive(SRWLock: PSRWLOCK) -> () {
-        lockify(SRWLock).lock_exclusive();
-    }
-    pub fn AcquireSRWLockShared(SRWLock: PSRWLOCK) -> () {
-        lockify(SRWLock).lock_shared();
-    }
-    pub fn ReleaseSRWLockExclusive(SRWLock: PSRWLOCK) -> () {
-        lockify(SRWLock).unlock_exclusive();
-    }
-    pub fn ReleaseSRWLockShared(SRWLock: PSRWLOCK) -> () {
-        lockify(SRWLock).unlock_shared();
-    }
-    pub fn TryAcquireSRWLockExclusive(SRWLock: PSRWLOCK) -> BOOLEAN {
-        if lockify(SRWLock).try_lock_exclusive() {
-            1
-        } else {
-            0
-        }
-    }
-    pub fn TryAcquireSRWLockShared(SRWLock: PSRWLOCK) -> BOOLEAN {
-        if lockify(SRWLock).try_lock_shared() {
-            1
-        } else {
-            0
         }
     }
 }
